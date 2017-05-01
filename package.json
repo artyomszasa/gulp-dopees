@@ -1,0 +1,30 @@
+{
+  "name": "gulp-dopees",
+  "version": "0.1.0",
+  "desciption": "Gulp plugin that implements dopees packaging and delivery logic.",
+  "author": {
+    "name": "Artyom Antyipin",
+    "email": "artyom.szasa@gmail.com"
+  },
+  "contributors": [
+    {
+      "name": "Marton Kakas",
+      "email": "kakas.marton@gmail.com"
+    }
+  ],
+  "homepage": "https://github.com/artyomszasa/gulp-dopees",
+  "bugs": "https://github.com/artyomszasa/gulp-dopees/issues",
+  "license": "MIT",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/artyomszasa/gulp-dopees.git"
+  },
+  "dependencies": {
+    "babel-preset-babili": "^0.0.9",
+    "babel-preset-es2015": "^6.24.1",
+    "babel-core": "^6.24.1",
+    "through2": "^2.0.3",
+    "vinyl-sourcemaps-apply": "^0.2.1"
+  }
+}
