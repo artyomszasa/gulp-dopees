@@ -1,7 +1,17 @@
 const through = require('through2'),
     path = require('path'),
     babel = require("babel-core"),
-    applySourceMap = require('vinyl-sourcemaps-apply');
+    vfs = require('vinyl-fs'),
+    applySourceMap = require('vinyl-sourcemaps-apply'),
+    Readable = require('stream').Readable;
+
+const getFileContents = (file, enc) => new Promise(resolve => {
+    if (file.isBuffer()) {
+        resolve(file.contents.toString(enc));
+    } else {
+        throw new Error(`Unsupported file type for ${file.relative}`);
+    }
+});
 
 const sequentialFlatten = function (source, mapping) {
     let results = [];
@@ -65,14 +75,30 @@ const emplaceConstants = function emplaceConstants (babel) {
 
 const mkFilter = predicate => new Step((chunk, enc) => new Promise ((resolve, reject) => {
     try {
-        if (predicate(chunk, enc)) {
-            resolve(chunk);
-        }
-        resolve();
+        Promise.resolve(predicate(chunk, enc))
+            .then(success => resolve(success ? chunk : undefined))
+            .then(null, reject);
     } catch (e) {
         reject(e);
     }
 }));
+
+const mkCollectVariables = map => mkFilter(file => {
+    if ('.json' === path.extname(file.relative)) {
+        let rel = file.relative.substr(0, file.relative.length - 5);
+        if (rel.endsWith('global')) {
+            rel = path.basename(rel);
+        }
+        if (!map.has(rel)) {
+            return getFileContents(file).then(contents => {
+                map.add(rel, JSON.parse(contents));
+                return false;
+            });
+        }
+        return false;
+    }
+    return true;
+});
 
 const mkChooseFirst = () => {
     const files = new Set();
@@ -109,13 +135,6 @@ const mkAddTargets = (pversion, prefix, targets) => new Step(file => pversion.th
     }
 }));
 
-const getFileContents = (file, enc) => new Promise(resolve => {
-    if (file.isBuffer()) {
-        resolve(file.contents.toString(enc));
-    } else {
-        throw new Error(`Unsupported file type for ${file.relative}`);
-    }
-});
 
 const babelConfigs = {
     "ES5Debug": {
@@ -205,9 +224,12 @@ function dope (options) {
     const targets = [].concat(opts.targets || 'es5');
     const mode = options.mode || options.configuration || process.env.CONFIGURATION || 'Debug';
 
+    const variables = new Map();
+
     const transformation = mkChooseFirst()
+        .chain(mkCollectVariables(variables))
         .chain(mkAddTargets(pversion, opts.prefix, targets))
-        .chain(mkBabel(mode))
+        .chain(mkBabel(mode, variables))
         .fun;
 
     return through.obj(function (file, enc, callback) {
@@ -219,4 +241,93 @@ function dope (options) {
         }, err => callback(err));
     });
 };
+
+dope.src = (root, ...args) => {
+
+    const components = new Set();
+
+    const configCollector = through.obj(function (file, enc, callback) {
+        const readConfig = config => {
+            if (Array.isArray(config)) {
+                config.forEach(readConfig);
+            } else {
+                if (!config.name) {
+                    throw new Error('component name must be specified');
+                }
+                if (components.has(config.name)) {
+                    throw new Error(`duplicate component name: ${config.name}`);
+                }
+                this.push({
+                    name : config.name,
+                    path: config.path ? (path.isAbsolute(config.path) ? config.path : path.join(path.dirname(file.path), config.path)) : path.dirname(file.path)
+                });
+            }
+        };
+        getFileContents(file, enc).then(contents => {
+            const config = JSON.parse(contents);
+            readConfig(config);
+            callback();
+        });
+    });
+
+    class ArrayStream extends Readable {
+        constructor (opts) {
+            super(Object.assign({}, opts, {
+                objectMode: true
+            }));
+            this._data = [];
+        }
+        add (item) {
+            this._data.push(item);
+            if (this.readRequest) {
+                this.readRequest = false;
+                this.doRead();
+            }
+        }
+        completeAdding () {
+            this.add(null);
+        }
+        doRead () {
+            let shouldStop = false;
+            while (!shouldStop && this._data.length) {
+                const item = this._data.shift();
+                shouldStop = !this.push(item);
+            }
+        }
+        _read () {
+            this.readRequest = true;
+            this.doRead();
+        }
+    };
+
+    const stream = new ArrayStream();
+
+    const usedComponents = new Set(args);
+
+    const fileLocator = through.obj(function (config, _, callback) {
+        if (usedComponents.has(config.name)) {
+            const push = through.obj((file, _, pushCallback) => {
+                stream.add(file);
+                pushCallback();
+            });
+            vfs.src([
+                path.join(config.path, '**', '*.js'),
+                path.join('!' + config.path, '**', 'node_modules', '**', '*')
+            ])
+            .pipe(push)
+            .on('finish', () => callback());
+        } else {
+            callback();
+        }
+    });
+
+    // start file emission
+    vfs.src(path.join(root, '**', 'dopees.json'))
+        .pipe(configCollector)
+        .pipe(fileLocator)
+        .on('finish', () => stream.completeAdding());
+
+    return stream;
+};
+
 module.exports = dope;
