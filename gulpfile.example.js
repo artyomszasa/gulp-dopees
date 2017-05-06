@@ -1,6 +1,5 @@
 const gulp = require('gulp'),
     del = require('del'),
-    merge = require('gulp-merge'),
     path = require('path'),
     dope = require('./index'),
     sourcemaps = require('gulp-sourcemaps');
@@ -36,6 +35,8 @@ gulp.task('scripts', ['clean-scripts'], () => {
 
 // **************************************************************************
 // Harder way: loading components manually...
+
+const merge = require('gulp-merge');
 
 // Source files may be from external directory.
 // Order is significant, e.g. if both lib1 and project contains mycomponent.js, only the later one is used.
