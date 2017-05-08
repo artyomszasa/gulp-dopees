@@ -13,6 +13,12 @@ const getFileContents = (file, enc) => new Promise(resolve => {
     }
 });
 
+const noCache = {
+    getOrAdd (_, __, ___, func) {
+        return func();
+    }
+};
+
 const sequentialFlatten = function (source, mapping) {
     let results = [];
     const f = i => {
@@ -114,13 +120,10 @@ const mkChooseFirst = () => {
 const mkAddTargets = (pversion, prefix, targets) => new Step(file => pversion.then(version => {
     if ('api.js' === file.relative) {
         file.dopeTarget = 'es5';
-        file.initBabelConfig = config => {
-            config.plugins = config.plugins || [];
-            config.plugins.unshift([emplaceConstants, {
-                version: version,
-                prefix: prefix || "",
-                isES6: -1 !== targets.indexOf('es6')
-            }]);
+        file.dopeVariables = {
+            version: version,
+            prefix: prefix || "",
+            isES6: -1 !== targets.indexOf('es6')
         };
         return file;
     } else {
@@ -181,20 +184,27 @@ const babelConfigs = {
     }
 };
 
-const mkBabel = mode => new Step((file, enc) => getFileContents(file, enc).then(sourceCode => {
-    const config = Object.assign({}, babelConfigs[file.dopeTarget.toUpperCase() + mode], { filename: file.path });
-    if (file.initBabelConfig) {
-        file.initBabelConfig(config);
-    }
-    const res = babel.transform(sourceCode, config);
-    if (!res) {
-        throw new Error(`Running babel on ${file.path} failed.`);
-    }
-    file.contents = new Buffer(res.code, enc);
-    if (res.srcMap && file.sourceMap) {
-        applySourceMap(file, res.srcMap);
-    }
-    return file;
+const mkBabel = (mode, variables, cache) => new Step((file, enc) => getFileContents(file, enc).then(sourceCode => {
+    const babelMode = file.dopeTarget.toUpperCase() + mode;
+    const vars = Object.assign(variables.get(file.relative) || {}, file.dopeVariables);
+    return cache.getOrAdd(file.history && file.history[0] || file.path, babelMode, { variables: vars }, () => {
+        const config = Object.assign({}, babelConfigs[babelMode], { filename: file.path });
+        if (Object.keys(vars).length) {
+            config.plugins = config.plugins || [];
+            config.plugins.unshift([emplaceConstants, vars]);
+        }
+        const res = babel.transform(sourceCode, config);
+        if (!res) {
+            throw new Error(`Running babel on ${file.path} failed.`);
+        }
+        return res;
+    }).then(res => {
+        file.contents = new Buffer(res.code, enc);
+        if (res.srcMap && file.sourceMap) {
+            applySourceMap(file, res.srcMap);
+        }
+        return file;
+    });
 }));
 
 /**
@@ -216,6 +226,8 @@ const mkBabel = mode => new Step((file, enc) => getFileContents(file, enc).then(
  * @param {string|string[]} [options.targets=es5] - Compilation targets. Supported values: _es5_, _es6_.
  * @param {function} [options.version] - Factory function to generate versioned folder names. May either return value
  * or Promise.
+ * @param {Cache} [options.cache] - Shared cache object to use. If not specified, all files are regenerated within each
+ * iteration.
  * @returns {stream} gulp compatible stream.
  */
 function dope (options) {
@@ -223,13 +235,14 @@ function dope (options) {
     const pversion = Promise.resolve(opts.version && opts.version() || Date.now());
     const targets = [].concat(opts.targets || 'es5');
     const mode = options.mode || options.configuration || process.env.CONFIGURATION || 'Debug';
+    const cache = opts.cache || noCache;
 
     const variables = new Map();
 
     const transformation = mkChooseFirst()
         .chain(mkCollectVariables(variables))
         .chain(mkAddTargets(pversion, opts.prefix, targets))
-        .chain(mkBabel(mode, variables))
+        .chain(mkBabel(mode, variables, cache))
         .fun;
 
     return through.obj(function (file, enc, callback) {
