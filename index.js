@@ -15,7 +15,7 @@ const getFileContents = (file, enc) => new Promise(resolve => {
 
 const noCache = {
     getOrAdd (_, __, ___, func) {
-        return func();
+        return Promise.resolve(func());
     }
 };
 
