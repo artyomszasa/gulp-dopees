@@ -21,9 +21,9 @@
     "url": "https://github.com/artyomszasa/gulp-dopees.git"
   },
   "dependencies": {
-    "babel-preset-babili": "^0.0.9",
+    "babel-preset-babili": "^0.1.4",
     "babel-preset-es2015": "^6.24.1",
-    "babel-core": "^6.24.1",
+    "babel-core": "^6.26.0",
     "through2": "^2.0.3",
     "vinyl-fs": "^2.4.4",
     "vinyl-sourcemaps-apply": "^0.2.1"
