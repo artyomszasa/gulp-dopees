@@ -8,6 +8,20 @@ const through = require('through2'),
 const getFileContents = (file, enc) => new Promise(resolve => {
     if (file.isBuffer()) {
         resolve(file.contents.toString(enc));
+    } else if (file.isStream()) {
+        let result = '';
+        file.contents
+            .on('data', chunk => {
+                var part;
+                if (chunk instanceof Buffer) {
+                    part = chunk.toString(enc);
+                } else {
+                    part = chunk;
+                }
+                result = result + part;
+            })
+            .on('end', () => resolve(result));
+        file.contents.resume();
     } else {
         throw new Error(`Unsupported file type for ${file.relative}`);
     }
@@ -97,7 +111,9 @@ const mkCollectVariables = map => mkFilter(file => {
         }
         if (!map.has(rel)) {
             return getFileContents(file).then(contents => {
-                map.add(rel, JSON.parse(contents));
+                const vars = JSON.parse(contents);
+                vars.component = file.relative.substr(file.relative.length - 5).replace(path.sep, '.');
+                map.add(rel, vars);
                 return false;
             });
         }
@@ -184,10 +200,16 @@ const babelConfigs = {
     }
 };
 
-const mkBabel = (mode, variables, cache) => new Step((file, enc) => getFileContents(file, enc).then(sourceCode => {
+const mkBabel = (mode, variables, cache) => new Step((file, enc) => {
     const babelMode = file.dopeTarget.toUpperCase() + mode;
     const vars = Object.assign(variables.get(file.relative) || {}, file.dopeVariables);
-    return cache.getOrAdd(file.history && file.history[0] || file.path, babelMode, { variables: vars }, () => {
+    if (!(vars && vars.component) && path.basename(file.relative) !== 'api.js') {
+        const comp = file.relative.split(path.sep);
+        comp.shift();
+        comp[comp.length - 1] = path.basename(file.relative, '.js');
+        vars.component = comp.join('.');
+    }
+    return cache.getOrAdd(file.history && file.history[0] || file.path, babelMode, { variables: vars }, () => getFileContents(file, enc).then(sourceCode => {
         const config = Object.assign({}, babelConfigs[babelMode], { filename: file.path });
         if (Object.keys(vars).length) {
             config.plugins = config.plugins || [];
@@ -198,14 +220,14 @@ const mkBabel = (mode, variables, cache) => new Step((file, enc) => getFileConte
             throw new Error(`Running babel on ${file.path} failed.`);
         }
         return res;
-    }).then(res => {
+    })).then(res => {
         file.contents = new Buffer(res.code, enc);
         if (res.srcMap && file.sourceMap) {
             applySourceMap(file, res.srcMap);
         }
         return file;
     });
-}));
+});
 
 /**
  * Compiles javascript files with respect to the dopees packaging rules.
@@ -268,7 +290,7 @@ dope.src = (root, ...args) => {
                     throw new Error('component name must be specified');
                 }
                 if (components.has(config.name)) {
-                    throw new Error(`duplicate component name: ${config.name}`);
+                    throw new Error(`duplicate library name: ${config.name}`);
                 }
                 this.push({
                     name : config.name,
